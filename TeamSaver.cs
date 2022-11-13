@@ -2,7 +2,7 @@
 
 using Oxide.Core;
 using System.Collections.Generic;
-
+using ProtoBuf;
 using static ProtoBuf.PlayerTeam;
 using PlayerTeam = RelationshipManager.PlayerTeam;
 using Pool = Facepunch.Pool;
@@ -14,6 +14,8 @@ namespace Oxide.Plugins
 
     class TeamSaver : RustPlugin
     {
+        private string[] _protoPath;
+        
         #region Initialization
         private void Init()
         {
@@ -24,6 +26,8 @@ namespace Oxide.Plugins
                 PrintWarning("Teams are disabled on this server. To enable it, set server variable \"maxteamsize\" to > 0 (default 8)");
                 return;
             }
+
+            _protoPath = new[] { Name };
 
             LoadData();
         }
@@ -79,16 +83,26 @@ namespace Oxide.Plugins
 
         private StoredData _storedData;
 
+        [ProtoContract]
         private class StoredData
         {
+            [ProtoMember(1, IsRequired = true)]
             public readonly Hash<ulong, StoredTeam> TeamsData = new Hash<ulong, StoredTeam>();
         }
 
+        [ProtoContract]
         public class StoredTeam
         {
+            [ProtoMember(1, IsRequired = false)]
             public ulong TeamID { get; set; }
+            
+            [ProtoMember(2, IsRequired = false)]
             public ulong TeamLeader { get; set; }
+            
+            [ProtoMember(3, IsRequired = false)]
             public readonly List<ulong> Members = new List<ulong>();
+            
+            [ProtoMember(4, IsRequired = false)]
             public readonly List<ulong> Invites = new List<ulong>();
 
             public void SetMembers(List<ulong> members)
@@ -160,7 +174,7 @@ namespace Oxide.Plugins
             }
         }
 
-        private void LoadData() => _storedData = Interface.Oxide.DataFileSystem.ReadObject<StoredData>(Name);
+        private void LoadData() => ProtoStorage.Load<StoredData>(_protoPath);
 
         private void ClearData()
         {
@@ -169,7 +183,7 @@ namespace Oxide.Plugins
             SaveData();
         }
 
-        private void SaveData() => Interface.Oxide.DataFileSystem.WriteObject(Name, _storedData);
+        private void SaveData() => ProtoStorage.Save(_storedData, _protoPath);
 
         #endregion Stored Data
 
@@ -304,14 +318,8 @@ namespace Oxide.Plugins
 
             PlayerTeam playerTeam = RelationshipManager.ServerInstance.CreateTeam();
             playerTeam.teamLeader = storedTeam.TeamLeader;
-            if (storedTeam.Invites.Count > 0)
-            {
-                playerTeam.invites = storedTeam.Invites;
-            }
-            if (storedTeam.Members.Count > 0)
-            {
-                playerTeam.members = storedTeam.Members;
-            }
+            playerTeam.invites = storedTeam.Invites;
+            playerTeam.members = storedTeam.Members;
             playerTeam.MarkDirty();
 
             foreach (ulong playerID in storedTeam.Members)
@@ -324,7 +332,7 @@ namespace Oxide.Plugins
                     continue;
                 }
                 player.currentTeam = playerTeam.teamID;
-                player.SendNetworkUpdate(BasePlayer.NetworkQueue.Update);
+                player.SendNetworkUpdate();
             }
 
             foreach (ulong invitedPlayerID in storedTeam.Invites)
@@ -335,7 +343,7 @@ namespace Oxide.Plugins
                     PrintError($"Can't find player {invitedPlayerID} while restoring invites of a team {playerTeam.teamID}");
                     continue;
                 }
-                player.ClientRPCPlayer<string, ulong, ulong>(null, player, "CLIENT_PendingInvite", teamLeader.displayName, playerTeam.teamLeader, playerTeam.teamID);
+                player.ClientRPCPlayer(null, player, "CLIENT_PendingInvite", teamLeader.displayName, playerTeam.teamLeader, playerTeam.teamID);
             }
 
             Log($"Saved team {storedTeam.TeamID} restored to new team {playerTeam.teamID}");
