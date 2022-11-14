@@ -222,6 +222,7 @@ namespace Oxide.Plugins
                 SendPendingInvite(inviteId);
             }
 
+            Log($"{team.teamID} team was restored");
             Interface.CallHook("OnTeamRestored", team);
         }
 
