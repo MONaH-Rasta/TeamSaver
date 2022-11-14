@@ -40,11 +40,12 @@ namespace Oxide.Plugins
         private class StoredData
         {
             [ProtoMember(1, IsRequired = false)]
-            public List<StoredTeam> Teams = new List<StoredTeam>();
+            public readonly List<StoredTeam> Teams = new List<StoredTeam>();
 
             public void SaveTeams(string[] path)
             {
                 Teams.Clear();
+
                 foreach (KeyValuePair<ulong, PlayerTeam> team in RelationshipManager.ServerInstance.teams)
                 {
                     Teams.Add(StoredTeam.SaveTeam(team.Value));
@@ -220,6 +221,8 @@ namespace Oxide.Plugins
                 _invitedTeam[inviteId] = team.teamID;
                 SendPendingInvite(inviteId);
             }
+
+            Interface.CallHook("OnTeamRestored", team);
         }
 
         public void SendPendingInvite(ulong inviteId)
@@ -251,11 +254,13 @@ namespace Oxide.Plugins
 
         public void HooksUnsubscribe()
         {
+            Unsubscribe(nameof(OnPlayerConnected));
             Unsubscribe(nameof(OnServerSave));
         }
 
         public void HooksSubscribe()
         {
+            Subscribe(nameof(OnPlayerConnected));
             Subscribe(nameof(OnServerSave));
         }
 
