@@ -1,9 +1,12 @@
 ﻿using System;
-
-using Oxide.Core;
 using System.Collections.Generic;
+using System.ComponentModel;
+
+using Newtonsoft.Json;
+using Oxide.Core;
 using ProtoBuf;
-using static ProtoBuf.PlayerTeam;
+using UnityEngine;
+
 using PlayerTeam = RelationshipManager.PlayerTeam;
 using Pool = Facepunch.Pool;
 
@@ -11,391 +14,270 @@ namespace Oxide.Plugins
 {
     [Info("TeamSaver", "MON@H", "1.0.0")]
     [Description("Saves and restores teams")]
-
-    class TeamSaver : RustPlugin
+    public class TeamSaver : RustPlugin
     {
-        private string[] _protoPath;
-        
-        #region Initialization
-        private void Init()
-        {
-            HooksUnsubscribe();
+        #region Fields
 
-            if (RelationshipManager.maxTeamSize < 1)
+        private PluginConfig _pluginConfig;
+        private StoredData _storedData;
+
+        private string[] _protoPath;
+
+        private readonly Hash<ulong, ulong> _invitedTeam = new Hash<ulong, ulong>();
+
+        #endregion Fields
+
+        #region Classes
+
+        public class PluginConfig
+        {
+            [DefaultValue(true)]
+            [JsonProperty(PropertyName = "Wipe Teams on Map Wipe")]
+            public bool MapWipeTeams { get; set; }
+        }
+
+        [ProtoContract]
+        private class StoredData
+        {
+            [ProtoMember(1, IsRequired = false)]
+            public List<StoredTeam> Teams = new List<StoredTeam>();
+
+            public void SaveTeams(string[] path)
+            {
+                Teams.Clear();
+                foreach (KeyValuePair<ulong, PlayerTeam> team in RelationshipManager.ServerInstance.teams)
+                {
+                    Teams.Add(StoredTeam.SaveTeam(team.Value));
+                }
+
+                ProtoStorage.Save(this, path);
+
+                for (int index = 0; index < Teams.Count; index++)
+                {
+                    StoredTeam team = Teams[index];
+                    Pool.Free(ref team);
+                }
+
+                Teams.Clear();
+            }
+        }
+
+        [ProtoContract]
+        public class StoredTeam : Pool.IPooled
+        {
+            [ProtoMember(1, IsRequired = false)]
+            public ulong TeamID { get; set; }
+
+            [ProtoMember(2, IsRequired = false)]
+            public ulong TeamLeader { get; set; }
+
+            [ProtoMember(3, IsRequired = false)]
+            public List<ulong> Members;
+
+            [ProtoMember(4, IsRequired = false)]
+            public List<ulong> Invites;
+
+            public static StoredTeam SaveTeam(PlayerTeam team)
+            {
+                StoredTeam save = Pool.Get<StoredTeam>();
+                save.TeamID = team.teamID;
+                save.TeamLeader = team.teamLeader;
+                save.Members = save.Members ?? Pool.GetList<ulong>();
+                save.Invites = save.Invites ?? Pool.GetList<ulong>();
+                save.Members.AddRange(team.members);
+                save.Invites.AddRange(team.invites);
+                return save;
+            }
+
+            public void EnterPool()
+            {
+                if (Members != null)
+                {
+                    Pool.FreeList(ref Members);
+                }
+
+                if (Invites != null)
+                {
+                    Pool.FreeList(ref Invites);
+                }
+            }
+
+            public void LeavePool()
+            {
+                TeamID = 0;
+                TeamLeader = 0;
+                Members = Pool.GetList<ulong>();
+                Invites = Pool.GetList<ulong>();
+            }
+        }
+
+        private void LoadData() => _storedData = ProtoStorage.Load<StoredData>(_protoPath) ?? new StoredData();
+        private void SaveData() => ProtoStorage.Save(_storedData, _protoPath);
+
+        #endregion Classes
+
+        #region Initialization
+
+        private void Init() => HooksUnsubscribe();
+
+        protected override void LoadDefaultConfig() { }
+
+        protected override void LoadConfig()
+        {
+            base.LoadConfig();
+            Config.Settings.DefaultValueHandling = DefaultValueHandling.Populate;
+            _pluginConfig = AdditionalConfig(Config.ReadObject<PluginConfig>());
+            Config.WriteObject(_pluginConfig);
+        }
+
+        public PluginConfig AdditionalConfig(PluginConfig config)
+        {
+            return config;
+        }
+
+        private void OnServerInitialized()
+        {
+            if (IsTeamsDisabled())
             {
                 PrintWarning("Teams are disabled on this server. To enable it, set server variable \"maxteamsize\" to > 0 (default 8)");
                 return;
             }
 
             _protoPath = new[] { Name };
-
             LoadData();
-        }
 
-        private void OnServerInitialized()
-        {
-            int saved = 0;
-
-            List<ulong> playerTeams = Pool.GetList<ulong>();
-
-            foreach (PlayerTeam playerTeam in RelationshipManager.ServerInstance.teams.Values)
+            if (_storedData.Teams.Count != 0)
             {
-                playerTeams.Add(playerTeam.teamID);
-
-                if (!_storedData.TeamsData.ContainsKey(playerTeam.teamID))
+                for (int index = _storedData.Teams.Count - 1; index >= 0; index--)
                 {
-                    StoredTeamSave(playerTeam);
-                    saved++;
+                    StoredTeam team = _storedData.Teams[index];
+                    RestoreTeam(team);
+                    Pool.Free(ref team);
                 }
             }
 
-            if (saved > 0)
-            {
-                Log($"{saved} teams are saved to data file");
-            }
-
-            int restored = 0;
-
-            foreach (KeyValuePair<ulong, StoredTeam> storedTeam in _storedData.TeamsData)
-            {
-                if (!playerTeams.Contains(storedTeam.Key))
-                {
-                    StoredTeamRestore(storedTeam.Value);
-                    restored++;
-                }
-            }
-
-            if (restored > 0)
-            {
-                Log($"{restored} teams restored from data file");
-            }
-
-            Pool.FreeList(ref playerTeams);
-
+            OnServerSave();
             HooksSubscribe();
         }
 
-        private void OnNewSave() => ClearData();
+        private void OnServerSave() => _storedData?.SaveTeams(_protoPath);
+
+        private void OnNewSave()
+        {
+            if (_pluginConfig.MapWipeTeams)
+            {
+                _storedData = new StoredData();
+                SaveData();
+            }
+        }
+
+        private void Unload() => OnServerSave();
 
         #endregion Initialization
 
-        #region Stored Data
-
-        private StoredData _storedData;
-
-        [ProtoContract]
-        private class StoredData
-        {
-            [ProtoMember(1, IsRequired = true)]
-            public readonly Hash<ulong, StoredTeam> TeamsData = new Hash<ulong, StoredTeam>();
-        }
-
-        [ProtoContract]
-        public class StoredTeam
-        {
-            [ProtoMember(1, IsRequired = false)]
-            public ulong TeamID { get; set; }
-            
-            [ProtoMember(2, IsRequired = false)]
-            public ulong TeamLeader { get; set; }
-            
-            [ProtoMember(3, IsRequired = false)]
-            public readonly List<ulong> Members = new List<ulong>();
-            
-            [ProtoMember(4, IsRequired = false)]
-            public readonly List<ulong> Invites = new List<ulong>();
-
-            public void SetMembers(List<ulong> members)
-            {
-                Members.Clear();
-                foreach (ulong playerID in members)
-                {
-                    if (!Members.Contains(playerID))
-                    {
-                        Members.Add(playerID);
-                    }
-                }
-            }
-
-            public bool MemberAdd(ulong playerID)
-            {
-                if (Members.Contains(playerID))
-                {
-                    return false;
-                }
-
-                Members.Add(playerID);
-                return true;
-            }
-
-            public bool MemberRemove(ulong playerID)
-            {
-                if (!Members.Contains(playerID))
-                {
-                    return false;
-                }
-
-                Members.Remove(playerID);
-                return true;
-            }
-
-            public void SetInvites(List<ulong> invites)
-            {
-                Invites.Clear();
-                foreach (ulong playerID in invites)
-                {
-                    if (!Invites.Contains(playerID))
-                    {
-                        Invites.Add(playerID);
-                    }
-                }
-            }
-
-            public bool InviteAdd(ulong playerID)
-            {
-                if (Invites.Contains(playerID))
-                {
-                    return false;
-                }
-
-                Invites.Add(playerID);
-                return true;
-            }
-
-            public bool InviteRemove(ulong playerID)
-            {
-                if (!Invites.Contains(playerID))
-                {
-                    return false;
-                }
-
-                Invites.Remove(playerID);
-                return true;
-            }
-        }
-
-        private void LoadData() => ProtoStorage.Load<StoredData>(_protoPath);
-
-        private void ClearData()
-        {
-            PrintWarning("Creating a new data file");
-            _storedData = new StoredData();
-            SaveData();
-        }
-
-        private void SaveData() => ProtoStorage.Save(_storedData, _protoPath);
-
-        #endregion Stored Data
-
         #region Oxide Hooks
 
-        private void OnTeamCreated(BasePlayer player, PlayerTeam team) => StoredTeamSave(team);
-        private void OnTeamUpdated(ulong currentTeam, PlayerTeam playerTeam, BasePlayer player) => StoredTeamSave(playerTeam);
-        private void OnTeamDisbanded(PlayerTeam team)
-        {
-            Log($"{team.teamID} Team Disbanded");
-            _storedData.TeamsData.Remove(team.teamID);
-            SaveData();
-        }
-
-        private void OnTeamInvite(BasePlayer inviter, BasePlayer target)
-        {
-            Log($"{inviter.currentTeam} {inviter.displayName} invited {target.displayName} to his team");
-            StoredTeam storedTeam = _storedData.TeamsData[inviter.currentTeam];
-            if (storedTeam == null)
-            {
-                PrintError($"OnTeamPromote: StoredTeam not found! {inviter.currentTeam}");
-                return;
-            }
-            if (storedTeam.InviteAdd(target.userID))
-            {
-                SaveData();
-            }
-        }
-
-        private void OnTeamRejectInvite(BasePlayer rejector, PlayerTeam team)
-        {
-            Log($"{team.teamID} OnTeamRejectInvite works! {rejector}");
-            StoredTeam storedTeam = _storedData.TeamsData[team.teamID];
-            if (storedTeam == null)
-            {
-                PrintError($"{team.teamID} OnTeamPromote: StoredTeam not found!");
-                return;
-            }
-            if (storedTeam.InviteRemove(rejector.userID))
-            {
-                SaveData();
-            }
-        }
-
-        private void OnTeamPromote(PlayerTeam team, BasePlayer newLeader)
-        {
-            Log($"{team.teamID} OnTeamPromote works! {newLeader}");
-            StoredTeam storedTeam = _storedData.TeamsData[team.teamID];
-            if (storedTeam == null)
-            {
-                PrintError($"{team.teamID} OnTeamPromote: StoredTeam not found!");
-                return;
-            }
-            storedTeam.TeamLeader = newLeader.userID;
-            SaveData();
-        }
-
-        private void OnTeamLeave(PlayerTeam team, BasePlayer player)
-        {
-            Log($"{team.teamID} OnTeamLeave works! {player}");
-            StoredTeam storedTeam = _storedData.TeamsData[team.teamID];
-            if (storedTeam == null)
-            {
-                PrintError($"{team.teamID} OnTeamLeave: StoredTeam not found!");
-                return;
-            }
-            if (storedTeam.MemberRemove(player.userID))
-            {
-                SaveData();
-            }
-        }
-
-        private void OnTeamKick(PlayerTeam team, BasePlayer player, ulong target)
-        {
-            Log($"{team.teamID} OnTeamKick works! {player} {target}");
-            StoredTeam storedTeam = _storedData.TeamsData[team.teamID];
-            if (storedTeam == null)
-            {
-                PrintError($"{team.teamID} OnTeamKick: StoredTeam not found!");
-                return;
-            }
-            if (storedTeam.MemberRemove(player.userID))
-            {
-                SaveData();
-            }
-        }
-
-        private void OnTeamAcceptInvite(PlayerTeam team, BasePlayer player)
-        {
-            Log($"{team.teamID} OnTeamAcceptInvite works! {player}");
-            StoredTeam storedTeam = _storedData.TeamsData[team.teamID];
-            if (storedTeam == null)
-            {
-                PrintError($"{team.teamID} OnTeamKick: StoredTeam not found!");
-                return;
-            }
-            if (storedTeam.InviteRemove(player.userID) | storedTeam.MemberAdd(player.userID))
-            {
-                SaveData();
-            }
-        }
+        private void OnPlayerConnected(BasePlayer player) => SendPendingInvite(player.userID);
 
         #endregion Oxide Hooks
 
-        #region Core
+        #region Core Methods
 
-        public void StoredTeamSave(PlayerTeam team)
+        public void RestoreTeam(StoredTeam storedTeam)
         {
-            Log($"{team.teamID} StoredTeamSave()");
-            StoredTeam storedTeam = _storedData.TeamsData[team.teamID];
-            if (storedTeam == null)
+            PlayerTeam team = RelationshipManager.ServerInstance.FindTeam(storedTeam.TeamID) ?? CreateTeam(storedTeam.TeamID);
+            team.teamLeader = storedTeam.TeamLeader;
+
+            if (storedTeam.Invites != null)
             {
-                storedTeam = new StoredTeam();
-                storedTeam.TeamID = team.teamID;
-                _storedData.TeamsData[team.teamID] = storedTeam;
-                SaveData();
+                team.invites.Clear();
+                team.invites.AddRange(storedTeam.Invites);
             }
-            storedTeam.TeamLeader = team.teamLeader;
-            storedTeam.SetMembers(team.members);
-            storedTeam.SetInvites(team.invites);
-            SaveData();
+
+            if (storedTeam.Members != null)
+            {
+                team.members.Clear();
+                team.members.AddRange(storedTeam.Members);
+            }
+
+            team.MarkDirty();
+
+            for (int index = 0; index < team.members.Count; index++)
+            {
+                ulong memberId = team.members[index];
+                RelationshipManager.ServerInstance.playerToTeam[memberId] = team;
+                BasePlayer player = FindPlayer(memberId);
+                if (player.IsValid())
+                {
+                    player.currentTeam = team.teamID;
+                    player.SendNetworkUpdate();
+                }
+            }
+
+            for (int index = 0; index < team.invites.Count; index++)
+            {
+                ulong inviteId = team.invites[index];
+                _invitedTeam[inviteId] = team.teamID;
+                SendPendingInvite(inviteId);
+            }
         }
 
-        public void StoredTeamRestore(StoredTeam storedTeam)
+        public void SendPendingInvite(ulong inviteId)
         {
-            BasePlayer teamLeader = FindPlayer(storedTeam.TeamLeader);
-            if (!teamLeader.IsValid())
+            ulong invitedTeam = _invitedTeam[inviteId];
+            if (invitedTeam == 0)
             {
-                PrintError($"Can't find player {storedTeam.TeamLeader} teamLeader of a team {storedTeam.TeamID}");
                 return;
             }
 
-            PlayerTeam playerTeam = RelationshipManager.ServerInstance.CreateTeam();
-            playerTeam.teamLeader = storedTeam.TeamLeader;
-            playerTeam.invites = storedTeam.Invites;
-            playerTeam.members = storedTeam.Members;
-            playerTeam.MarkDirty();
-
-            foreach (ulong playerID in storedTeam.Members)
+            PlayerTeam team = RelationshipManager.ServerInstance.FindTeam(invitedTeam);
+            if (team == null)
             {
-                RelationshipManager.ServerInstance.playerToTeam[playerID] = playerTeam;
-                BasePlayer player = FindPlayer(playerID);
-                if (!player.IsValid())
-                {
-                    PrintError($"Can't find player {playerID} while restoring team members of a team {playerTeam.teamID}");
-                    continue;
-                }
-                player.currentTeam = playerTeam.teamID;
-                player.SendNetworkUpdate();
+                return;
             }
 
-            foreach (ulong invitedPlayerID in storedTeam.Invites)
+            BasePlayer invitedPlayer = FindPlayer(inviteId);
+            if (invitedPlayer.IsValid())
             {
-                BasePlayer player = FindPlayer(invitedPlayerID);
-                if (!player.IsValid())
-                {
-                    PrintError($"Can't find player {invitedPlayerID} while restoring invites of a team {playerTeam.teamID}");
-                    continue;
-                }
-                player.ClientRPCPlayer(null, player, "CLIENT_PendingInvite", teamLeader.displayName, playerTeam.teamLeader, playerTeam.teamID);
+                string leaderName = FindPlayer(team.teamLeader)?.displayName ?? covalence.Players.FindPlayerById(team.teamLeader.ToString())?.Name ?? "Unknown";
+                invitedPlayer.ClientRPCPlayer(null, invitedPlayer, "CLIENT_PendingInvite", leaderName, team.teamLeader, team.teamID);
+                _invitedTeam.Remove(inviteId);
             }
-
-            Log($"Saved team {storedTeam.TeamID} restored to new team {playerTeam.teamID}");
-            _storedData.TeamsData.Remove(storedTeam.TeamID);
-            StoredTeamSave(playerTeam);
         }
 
-        #endregion Core
+        #endregion Core Methods
 
         #region Helpers
 
-        private void HooksUnsubscribe()
+        public void HooksUnsubscribe()
         {
-            Unsubscribe(nameof(OnTeamAcceptInvite));
-            Unsubscribe(nameof(OnTeamCreated));
-            Unsubscribe(nameof(OnTeamDisbanded));
-            Unsubscribe(nameof(OnTeamInvite));
-            Unsubscribe(nameof(OnTeamKick));
-            Unsubscribe(nameof(OnTeamLeave));
-            Unsubscribe(nameof(OnTeamPromote));
-            Unsubscribe(nameof(OnTeamRejectInvite));
-            Unsubscribe(nameof(OnTeamUpdated));
+            Unsubscribe(nameof(OnServerSave));
         }
 
-        private void HooksSubscribe()
+        public void HooksSubscribe()
         {
-            Subscribe(nameof(OnTeamAcceptInvite));
-            Subscribe(nameof(OnTeamCreated));
-            Subscribe(nameof(OnTeamDisbanded));
-            Subscribe(nameof(OnTeamInvite));
-            Subscribe(nameof(OnTeamKick));
-            Subscribe(nameof(OnTeamLeave));
-            Subscribe(nameof(OnTeamPromote));
-            Subscribe(nameof(OnTeamRejectInvite));
-            Subscribe(nameof(OnTeamUpdated));
+            Subscribe(nameof(OnServerSave));
         }
 
-        private BasePlayer FindPlayer(ulong userID)
+        public PlayerTeam CreateTeam(ulong teamId)
         {
-            BasePlayer player = BasePlayer.FindByID(userID);
-            if (player == null)
+            PlayerTeam team = Pool.Get<PlayerTeam>();
+            team.teamID = teamId;
+            team.teamStartTime = Time.realtimeSinceStartup;
+
+            RelationshipManager instance = RelationshipManager.ServerInstance;
+            instance.teams[teamId] = team;
+            if (instance.lastTeamIndex <= teamId)
             {
-                player = BasePlayer.FindAwakeOrSleeping(userID.ToString());
+                instance.lastTeamIndex = teamId + 1;
             }
 
-            return player;
+            return team;
         }
 
-        private void Log(string text)
-        {
-            LogToFile("log", $"{DateTime.Now.ToString("HH:mm:ss")} {text}", this);
-        }
+        public BasePlayer FindPlayer(ulong userID) => BasePlayer.FindByID(userID) ?? BasePlayer.FindSleeping(userID);
+        public bool IsTeamsDisabled() => RelationshipManager.maxTeamSize == 0;
+        public void Log(string text) => LogToFile("log", $"{DateTime.Now.ToString("HH:mm:ss")} {text}", this);
 
         #endregion Helpers
     }
