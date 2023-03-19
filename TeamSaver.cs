@@ -12,7 +12,7 @@ using Pool = Facepunch.Pool;
 
 namespace Oxide.Plugins
 {
-    [Info("TeamSaver", "MON@H", "1.0.0")]
+    [Info("TeamSaver", "MON@H", "1.0.1")]
     [Description("Saves and restores teams")]
     public class TeamSaver : RustPlugin
     {
@@ -119,21 +119,10 @@ namespace Oxide.Plugins
 
         #region Initialization
 
-        private void Init() => HooksUnsubscribe();
-
-        protected override void LoadDefaultConfig() { }
-
-        protected override void LoadConfig()
+        private void Init()
         {
-            base.LoadConfig();
-            Config.Settings.DefaultValueHandling = DefaultValueHandling.Populate;
-            _pluginConfig = AdditionalConfig(Config.ReadObject<PluginConfig>());
-            Config.WriteObject(_pluginConfig);
-        }
-
-        public PluginConfig AdditionalConfig(PluginConfig config)
-        {
-            return config;
+            HooksUnsubscribe();
+            _protoPath = new[] { Name };
         }
 
         private void OnServerInitialized()
@@ -144,7 +133,6 @@ namespace Oxide.Plugins
                 return;
             }
 
-            _protoPath = new[] { Name };
             LoadData();
 
             if (_storedData.Teams.Count != 0)
@@ -175,6 +163,25 @@ namespace Oxide.Plugins
         private void Unload() => OnServerSave();
 
         #endregion Initialization
+
+        #region Configuration
+
+        protected override void LoadDefaultConfig() { }
+
+        protected override void LoadConfig()
+        {
+            base.LoadConfig();
+            Config.Settings.DefaultValueHandling = DefaultValueHandling.Populate;
+            _pluginConfig = AdditionalConfig(Config.ReadObject<PluginConfig>());
+            Config.WriteObject(_pluginConfig);
+        }
+
+        public PluginConfig AdditionalConfig(PluginConfig config)
+        {
+            return config;
+        }
+
+        #endregion Configuration
 
         #region Oxide Hooks
 
