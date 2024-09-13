@@ -251,7 +251,8 @@ namespace Oxide.Plugins
             if (invitedPlayer.IsValid())
             {
                 string leaderName = FindPlayer(team.teamLeader)?.displayName ?? covalence.Players.FindPlayerById(team.teamLeader.ToString())?.Name ?? "Unknown";
-                invitedPlayer.ClientRPCPlayer(null, invitedPlayer, "CLIENT_PendingInvite", leaderName, team.teamLeader, team.teamID);
+                invitedPlayer.ClientRPC(RpcTarget.Player("CLIENT_PendingInvite", invitedPlayer), leaderName, team.teamLeader, team.teamID);
+
                 _invitedTeam.Remove(inviteId);
             }
         }
