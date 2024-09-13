@@ -12,7 +12,7 @@ using Pool = Facepunch.Pool;
 
 namespace Oxide.Plugins
 {
-    [Info("TeamSaver", "MON@H", "1.0.1")]
+    [Info("TeamSaver", "MON@H", "1.0.2")]
     [Description("Saves and restores teams")]
     public class TeamSaver : RustPlugin
     {
@@ -23,7 +23,7 @@ namespace Oxide.Plugins
 
         private string[] _protoPath;
 
-        private readonly Hash<ulong, ulong> _invitedTeam = new Hash<ulong, ulong>();
+        private readonly Hash<ulong, ulong> _invitedTeam = new();
 
         #endregion Fields
 
@@ -40,7 +40,7 @@ namespace Oxide.Plugins
         private class StoredData
         {
             [ProtoMember(1, IsRequired = false)]
-            public readonly List<StoredTeam> Teams = new List<StoredTeam>();
+            public readonly List<StoredTeam> Teams = new();
 
             public void SaveTeams(string[] path)
             {
@@ -83,8 +83,8 @@ namespace Oxide.Plugins
                 StoredTeam save = Pool.Get<StoredTeam>();
                 save.TeamID = team.teamID;
                 save.TeamLeader = team.teamLeader;
-                save.Members = save.Members ?? Pool.GetList<ulong>();
-                save.Invites = save.Invites ?? Pool.GetList<ulong>();
+                save.Members ??= Pool.Get<List<ulong>>();
+                save.Invites ??= Pool.Get<List<ulong>>();
                 save.Members.AddRange(team.members);
                 save.Invites.AddRange(team.invites);
                 return save;
@@ -94,12 +94,12 @@ namespace Oxide.Plugins
             {
                 if (Members != null)
                 {
-                    Pool.FreeList(ref Members);
+                    Pool.FreeUnmanaged(ref Members);
                 }
 
                 if (Invites != null)
                 {
-                    Pool.FreeList(ref Invites);
+                    Pool.FreeUnmanaged(ref Invites);
                 }
             }
 
@@ -107,12 +107,12 @@ namespace Oxide.Plugins
             {
                 TeamID = 0;
                 TeamLeader = 0;
-                Members = Pool.GetList<ulong>();
-                Invites = Pool.GetList<ulong>();
+                Members = Pool.Get<List<ulong>>();
+                Invites = Pool.Get<List<ulong>>();
             }
         }
 
-        private void LoadData() => _storedData = ProtoStorage.Load<StoredData>(_protoPath) ?? new StoredData();
+        private void LoadData() => _storedData = ProtoStorage.Load<StoredData>(_protoPath) ?? new();
         private void SaveData() => ProtoStorage.Save(_storedData, _protoPath);
 
         #endregion Classes
@@ -155,7 +155,7 @@ namespace Oxide.Plugins
         {
             if (_pluginConfig.MapWipeTeams)
             {
-                _storedData = new StoredData();
+                _storedData = new();
                 SaveData();
             }
         }
