@@ -267,7 +267,7 @@ namespace Oxide.Plugins
 
         public BasePlayer FindPlayer(ulong userID) => BasePlayer.FindByID(userID) ?? BasePlayer.FindSleeping(userID);
         public bool IsTeamsDisabled() => RelationshipManager.maxTeamSize == 0;
-        public void Log(string text) => LogToFile("log", $"{DateTime.Now.ToString("HH:mm:ss")} {text}", this);
+        public void Log(string text) => LogToFile("log", $"{DateTime.Now:HH:mm:ss} {text}", this);
 
         #endregion Helpers
     }
