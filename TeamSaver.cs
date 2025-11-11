@@ -9,7 +9,7 @@ using PlayerTeam = RelationshipManager.PlayerTeam;
 
 namespace Oxide.Plugins
 {
-    [Info("TeamSaver", "MON@H", "1.0.2")]
+    [Info("TeamSaver", "MON@H", "1.0.3")]
     [Description("Saves and restores teams")]
     public class TeamSaver : RustPlugin
     {
