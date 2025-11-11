@@ -1,11 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
-
 using Newtonsoft.Json;
 using Oxide.Core;
 using ProtoBuf;
-using UnityEngine;
 
 using PlayerTeam = RelationshipManager.PlayerTeam;
 using Pool = Facepunch.Pool;
@@ -23,7 +21,7 @@ namespace Oxide.Plugins
 
         private string[] _protoPath;
 
-        private readonly Hash<ulong, ulong> _invitedTeam = new();
+        private readonly Dictionary<ulong, ulong> _invitedTeam = new();
 
         #endregion Fields
 
@@ -176,10 +174,7 @@ namespace Oxide.Plugins
             Config.WriteObject(_pluginConfig);
         }
 
-        public PluginConfig AdditionalConfig(PluginConfig config)
-        {
-            return config;
-        }
+        public static PluginConfig AdditionalConfig(PluginConfig config) => config;
 
         #endregion Configuration
 
@@ -193,7 +188,7 @@ namespace Oxide.Plugins
 
         public void RestoreTeam(StoredTeam storedTeam)
         {
-            PlayerTeam team = RelationshipManager.ServerInstance.FindTeam(storedTeam.TeamID) ?? CreateTeam(storedTeam.TeamID);
+            PlayerTeam team = RelationshipManager.ServerInstance.FindTeam(storedTeam.TeamID) ?? RelationshipManager.ServerInstance.CreateTeam();
             team.teamLeader = storedTeam.TeamLeader;
 
             if (storedTeam.Invites != null)
@@ -235,20 +230,17 @@ namespace Oxide.Plugins
 
         public void SendPendingInvite(ulong inviteId)
         {
-            ulong invitedTeam = _invitedTeam[inviteId];
-            if (invitedTeam == 0)
+            if (!_invitedTeam.TryGetValue(inviteId, out ulong invitedTeam))
             {
                 return;
             }
 
-            PlayerTeam team = RelationshipManager.ServerInstance.FindTeam(invitedTeam);
-            if (team == null)
+            if (RelationshipManager.ServerInstance.FindTeam(invitedTeam) is not { } team)
             {
                 return;
             }
 
-            BasePlayer invitedPlayer = FindPlayer(inviteId);
-            if (invitedPlayer.IsValid())
+            if (FindPlayer(inviteId) is { } invitedPlayer && invitedPlayer.IsValid())
             {
                 string leaderName = FindPlayer(team.teamLeader)?.displayName ?? covalence.Players.FindPlayerById(team.teamLeader.ToString())?.Name ?? "Unknown";
                 invitedPlayer.ClientRPC(RpcTarget.Player("CLIENT_PendingInvite", invitedPlayer), leaderName, team.teamLeader, team.teamID);
@@ -271,22 +263,6 @@ namespace Oxide.Plugins
         {
             Subscribe(nameof(OnPlayerConnected));
             Subscribe(nameof(OnServerSave));
-        }
-
-        public PlayerTeam CreateTeam(ulong teamId)
-        {
-            PlayerTeam team = Pool.Get<PlayerTeam>();
-            team.teamID = teamId;
-            team.teamStartTime = Time.realtimeSinceStartup;
-
-            RelationshipManager instance = RelationshipManager.ServerInstance;
-            instance.teams[teamId] = team;
-            if (instance.lastTeamIndex <= teamId)
-            {
-                instance.lastTeamIndex = teamId + 1;
-            }
-
-            return team;
         }
 
         public BasePlayer FindPlayer(ulong userID) => BasePlayer.FindByID(userID) ?? BasePlayer.FindSleeping(userID);
