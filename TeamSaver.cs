@@ -6,7 +6,6 @@ using Oxide.Core;
 using ProtoBuf;
 
 using PlayerTeam = RelationshipManager.PlayerTeam;
-using Pool = Facepunch.Pool;
 
 namespace Oxide.Plugins
 {
@@ -50,19 +49,12 @@ namespace Oxide.Plugins
                 }
 
                 ProtoStorage.Save(this, path);
-
-                for (int index = 0; index < Teams.Count; index++)
-                {
-                    StoredTeam team = Teams[index];
-                    Pool.Free(ref team);
-                }
-
                 Teams.Clear();
             }
         }
 
         [ProtoContract]
-        public class StoredTeam : Pool.IPooled
+        public class StoredTeam
         {
             [ProtoMember(1, IsRequired = false)]
             public ulong TeamID { get; set; }
@@ -78,35 +70,16 @@ namespace Oxide.Plugins
 
             public static StoredTeam SaveTeam(PlayerTeam team)
             {
-                StoredTeam save = Pool.Get<StoredTeam>();
-                save.TeamID = team.teamID;
-                save.TeamLeader = team.teamLeader;
-                save.Members ??= Pool.Get<List<ulong>>();
-                save.Invites ??= Pool.Get<List<ulong>>();
-                save.Members.AddRange(team.members);
-                save.Invites.AddRange(team.invites);
-                return save;
-            }
-
-            public void EnterPool()
-            {
-                if (Members != null)
+                StoredTeam storedTeam = new()
                 {
-                    Pool.FreeUnmanaged(ref Members);
-                }
-
-                if (Invites != null)
-                {
-                    Pool.FreeUnmanaged(ref Invites);
-                }
-            }
-
-            public void LeavePool()
-            {
-                TeamID = 0;
-                TeamLeader = 0;
-                Members = Pool.Get<List<ulong>>();
-                Invites = Pool.Get<List<ulong>>();
+                    TeamID = team.teamID,
+                    TeamLeader = team.teamLeader
+                };
+                storedTeam.Members ??= new List<ulong>();
+                storedTeam.Invites ??= new List<ulong>();
+                storedTeam.Members.AddRange(team.members);
+                storedTeam.Invites.AddRange(team.invites);
+                return storedTeam;
             }
         }
 
@@ -139,7 +112,6 @@ namespace Oxide.Plugins
                 {
                     StoredTeam team = _storedData.Teams[index];
                     RestoreTeam(team);
-                    Pool.Free(ref team);
                 }
             }
 
